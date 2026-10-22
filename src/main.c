@@ -50,7 +50,7 @@ int main(void)
         error_blink();
     }
 
-    err = bt_le_adv_start(BT_LE_ADV_CONN,
+    err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1,
                           advertising_data,
                           ARRAY_SIZE(advertising_data),
                           NULL, 0);
