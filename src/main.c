@@ -10,14 +10,15 @@
 static const struct gpio_dt_spec led =
     GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
 
+static const char device_name[] = "StickerTracker";
+
 static const struct bt_data advertising_data[] = {
     BT_DATA_BYTES(BT_DATA_FLAGS,
                   (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
     BT_DATA(BT_DATA_NAME_COMPLETE,
-            CONFIG_BT_DEVICE_NAME,
-            sizeof(CONFIG_BT_DEVICE_NAME) - 1),
+            device_name,
+            sizeof(device_name) - 1),
 };
-
 static void error_blink(void)
 {
     while (1) {
