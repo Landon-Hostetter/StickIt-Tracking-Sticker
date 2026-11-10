@@ -11,80 +11,156 @@
 #include "deca_probe_interface.h"
 #include "deca_device_api.h"
 
-/* ==========================================
- * BLE UUID DEFINITIONS
- * ========================================== */
+/* BLE UUIDs */
 
-/* Service: 7d5e219a-8048-4f6b-2d91-3ca701c40210 */
 static struct bt_uuid_128 tracker_service_uuid =
-    BT_UUID_INIT_128(
-        0x10, 0x02, 0xC4, 0x01,
-        0xA7, 0x3C, 0x91, 0x2D,
-        0x6B, 0x4F, 0x48, 0x80,
-        0x9A, 0x21, 0x5E, 0x7D
-    );
+    BT_UUID_INIT_128(0x10,0x02,0xC4,0x01,0xA7,0x3C,0x91,0x2D,
+                     0x6B,0x4F,0x48,0x80,0x9A,0x21,0x5E,0x7D);
 
-/* Status: 7d5e219b-8048-4f6b-2d91-3ca701c40210 */
 static struct bt_uuid_128 tracker_status_uuid =
-    BT_UUID_INIT_128(
-        0x10, 0x02, 0xC4, 0x01,
-        0xA7, 0x3C, 0x91, 0x2D,
-        0x6B, 0x4F, 0x48, 0x80,
-        0x9B, 0x21, 0x5E, 0x7D
-    );
+    BT_UUID_INIT_128(0x10,0x02,0xC4,0x01,0xA7,0x3C,0x91,0x2D,
+                     0x6B,0x4F,0x48,0x80,0x9B,0x21,0x5E,0x7D);
 
-/* UWB ID: 7d5e219c-8048-4f6b-2d91-3ca701c40210 */
 static struct bt_uuid_128 tracker_uwb_id_uuid =
-    BT_UUID_INIT_128(
-        0x10, 0x02, 0xC4, 0x01,
-        0xA7, 0x3C, 0x91, 0x2D,
-        0x6B, 0x4F, 0x48, 0x80,
-        0x9C, 0x21, 0x5E, 0x7D
-    );
+    BT_UUID_INIT_128(0x10,0x02,0xC4,0x01,0xA7,0x3C,0x91,0x2D,
+                     0x6B,0x4F,0x48,0x80,0x9C,0x21,0x5E,0x7D);
 
-/* Command: 7d5e219d-8048-4f6b-2d91-3ca701c40210 */
 static struct bt_uuid_128 tracker_command_uuid =
-    BT_UUID_INIT_128(
-        0x10, 0x02, 0xC4, 0x01,
-        0xA7, 0x3C, 0x91, 0x2D,
-        0x6B, 0x4F, 0x48, 0x80,
-        0x9D, 0x21, 0x5E, 0x7D
-    );
+    BT_UUID_INIT_128(0x10,0x02,0xC4,0x01,0xA7,0x3C,0x91,0x2D,
+                     0x6B,0x4F,0x48,0x80,0x9D,0x21,0x5E,0x7D);
 
-/* Notifications: 7d5e219e-8048-4f6b-2d91-3ca701c40210 */
 static struct bt_uuid_128 tracker_notify_uuid =
-    BT_UUID_INIT_128(
-        0x10, 0x02, 0xC4, 0x01,
-        0xA7, 0x3C, 0x91, 0x2D,
-        0x6B, 0x4F, 0x48, 0x80,
-        0x9E, 0x21, 0x5E, 0x7D
-    );
+    BT_UUID_INIT_128(0x10,0x02,0xC4,0x01,0xA7,0x3C,0x91,0x2D,
+                     0x6B,0x4F,0x48,0x80,0x9E,0x21,0x5E,0x7D);
 
-/* ==========================================
- * TRACKER DATA
- * ========================================== */
+/* Tracker state */
 
 static uint8_t tracker_status = 0;
+static bool uwb_ready = false;
 
-/* Device ID 0xDECA0302, transmitted little-endian */
 static const uint8_t uwb_device_id_bytes[] = {
     0x02, 0x03, 0xCA, 0xDE
 };
 
-/* Notification event identifiers */
 #define TRACKER_EVENT_PING_ACK  0x81
 #define TRACKER_EVENT_STATUS    0x82
+#define TRACKER_EVENT_UWB_TX    0x83
 
-/* Forward declaration */
+#define TRACKER_NOTIFY_ATTR_INDEX 8
+#define TRACKER_TXFRS_MASK        0x00000080UL
+
 static void send_tracker_notification(
     struct bt_conn *conn,
     uint8_t event,
     uint8_t status
 );
 
-/* ==========================================
- * GATT READ CALLBACKS
- * ========================================== */
+/* UWB radio configuration */
+
+static int initialize_uwb_radio(void)
+{
+    printk("\n[UWB] Initializing DW3110 radio...\n");
+
+    int ret = dwt_initialise(0);
+
+    if (ret != DWT_SUCCESS) {
+        printk("[UWB] Radio initialization failed: %d\n", ret);
+        return -1;
+    }
+
+    printk("[UWB] Applying radio configuration...\n");
+
+    static dwt_config_t config = {
+        .chan           = 5,
+        .txPreambLength = DWT_PLEN_128,
+        .rxPAC          = DWT_PAC8,
+        .txCode         = 9,
+        .rxCode         = 9,
+        .sfdType        = DWT_SFD_IEEE_4Z,
+        .dataRate       = DWT_BR_6M8,
+        .phrMode        = DWT_PHRMODE_STD,
+        .phrRate        = DWT_PHRRATE_STD,
+        .sfdTO          = 0,
+        .stsMode        = DWT_STS_MODE_OFF,
+        .stsLength      = DWT_STS_LEN_64,
+        .pdoaMode       = DWT_PDOA_M0
+    };
+
+    ret = dwt_configure(&config);
+
+    if (ret != DWT_SUCCESS) {
+        printk("[UWB] Radio configuration failed: %d\n", ret);
+        return -2;
+    }
+
+    printk("[UWB] Radio configured successfully.\n");
+    return 0;
+}
+
+/* Transmit one UWB test packet */
+
+static int transmit_uwb_packet(void)
+{
+    if (!uwb_ready) {
+        printk("[UWB] ERROR: Radio is not ready.\n");
+        return -1;
+    }
+
+    static uint8_t packet[] = {
+        'D', 'W', 'M', '3', '0', '0', '1'
+    };
+
+    printk("\n[UWB] Preparing test transmission...\n");
+
+    /* Clear any previous TX completion flag. */
+    dwt_writesysstatuslo(TRACKER_TXFRS_MASK);
+
+    int ret = dwt_writetxdata(
+        sizeof(packet),
+        packet,
+        0
+    );
+
+    if (ret != DWT_SUCCESS) {
+        printk("[UWB] Failed to write TX data: %d\n", ret);
+        return -2;
+    }
+
+    /* Hardware adds the two-byte CRC. */
+    dwt_writetxfctrl(
+        sizeof(packet) + 2,
+        0,
+        0
+    );
+
+    printk("[UWB] Starting transmission...\n");
+
+    ret = dwt_starttx(DWT_START_TX_IMMEDIATE);
+
+    if (ret != DWT_SUCCESS) {
+        printk("[UWB] Transmission could not start: %d\n", ret);
+        return -4;
+    }
+
+    /* Wait up to approximately 100 ms for TX completion. */
+    for (int i = 0; i < 100; i++) {
+        uint32_t status = dwt_readsysstatuslo();
+
+        if (status & TRACKER_TXFRS_MASK) {
+            dwt_writesysstatuslo(TRACKER_TXFRS_MASK);
+
+            printk("[UWB] SUCCESS: Transmission completed!\n");
+            return 0;
+        }
+
+        k_msleep(1);
+    }
+
+    printk("[UWB] ERROR: Transmission timed out.\n");
+    return -5;
+}
+
+/* BLE read callbacks */
 
 static ssize_t read_tracker_status(
     struct bt_conn *conn,
@@ -112,9 +188,7 @@ static ssize_t read_uwb_device_id(
     );
 }
 
-/* ==========================================
- * GATT WRITE CALLBACK
- * ========================================== */
+/* BLE command callback */
 
 static ssize_t write_tracker_command(
     struct bt_conn *conn,
@@ -137,26 +211,32 @@ static ssize_t write_tracker_command(
     printk("\n[BLE] Command received: 0x%02X\n", command[0]);
 
     switch (command[0]) {
-    case 0x01:
-        printk("[BLE] PING command received.\n");
 
-        send_tracker_notification(
-            conn,
-            TRACKER_EVENT_PING_ACK,
-            tracker_status
-        );
+    case 0x01:
+        printk("[BLE] PING received.\n");
+        send_tracker_notification(conn, TRACKER_EVENT_PING_ACK,
+                                  tracker_status);
         break;
 
     case 0x02:
-        printk("[BLE] STATUS request received.\n");
-        printk("[BLE] Tracker status: %u\n", tracker_status);
+        printk("[BLE] STATUS requested.\n");
+        send_tracker_notification(conn, TRACKER_EVENT_STATUS,
+                                  tracker_status);
+        break;
+
+    case 0x03: {
+        printk("[BLE] UWB transmission requested.\n");
+
+        int result = transmit_uwb_packet();
 
         send_tracker_notification(
             conn,
-            TRACKER_EVENT_STATUS,
-            tracker_status
+            TRACKER_EVENT_UWB_TX,
+            (result == 0) ? 1 : 0
         );
+
         break;
+    }
 
     default:
         printk("[BLE] Unknown command.\n");
@@ -166,14 +246,11 @@ static ssize_t write_tracker_command(
     return len;
 }
 
-/* ==========================================
- * GATT SERVICE DEFINITION
- * ========================================== */
+/* BLE GATT service */
 
 BT_GATT_SERVICE_DEFINE(
     tracker_service,
 
-    /* Characteristic 1: Tracker status */
     BT_GATT_PRIMARY_SERVICE(&tracker_service_uuid),
 
     BT_GATT_CHARACTERISTIC(
@@ -185,7 +262,6 @@ BT_GATT_SERVICE_DEFINE(
         NULL
     ),
 
-    /* Characteristic 2: UWB device ID */
     BT_GATT_CHARACTERISTIC(
         &tracker_uwb_id_uuid.uuid,
         BT_GATT_CHRC_READ,
@@ -195,7 +271,6 @@ BT_GATT_SERVICE_DEFINE(
         NULL
     ),
 
-    /* Characteristic 3: Command input */
     BT_GATT_CHARACTERISTIC(
         &tracker_command_uuid.uuid,
         BT_GATT_CHRC_WRITE,
@@ -205,7 +280,6 @@ BT_GATT_SERVICE_DEFINE(
         NULL
     ),
 
-    /* Characteristic 4: Tracker notifications */
     BT_GATT_CHARACTERISTIC(
         &tracker_notify_uuid.uuid,
         BT_GATT_CHRC_NOTIFY,
@@ -215,30 +289,13 @@ BT_GATT_SERVICE_DEFINE(
         NULL
     ),
 
-    /* Client Characteristic Configuration Descriptor */
     BT_GATT_CCC(
         NULL,
         BT_GATT_PERM_READ | BT_GATT_PERM_WRITE
     )
 );
 
-/* ==========================================
- * BLE NOTIFICATION FUNCTION
- * ========================================== */
-
-/*
- * Attribute index 8 is the notification characteristic's
- * value attribute:
- *
- * 0: Primary service
- * 1-2: Status declaration/value
- * 3-4: UWB ID declaration/value
- * 5-6: Command declaration/value
- * 7-8: Notification declaration/value
- * 9: CCCD
- */
-
-#define TRACKER_NOTIFY_ATTR_INDEX 8
+/* BLE notifications */
 
 static void send_tracker_notification(
     struct bt_conn *conn,
@@ -246,38 +303,23 @@ static void send_tracker_notification(
     uint8_t status
 )
 {
-    uint8_t notification_data[2] = {
-        event,
-        status
-    };
+    uint8_t data[2] = { event, status };
 
     int ret = bt_gatt_notify(
         conn,
         &tracker_service.attrs[TRACKER_NOTIFY_ATTR_INDEX],
-        notification_data,
-        sizeof(notification_data)
+        data,
+        sizeof(data)
     );
 
     if (ret == 0) {
-        printk(
-            "[BLE] Notification sent: %02X %02X\n",
-            event,
-            status
-        );
+        printk("[BLE] Notification: %02X %02X\n", event, status);
     } else {
-        printk(
-            "[BLE] Notification not sent: %d\n",
-            ret
-        );
-        printk(
-            "[BLE] Check that the iPhone subscribed to notifications.\n"
-        );
+        printk("[BLE] Notification failed: %d\n", ret);
     }
 }
 
-/* ==========================================
- * BLE ADVERTISING DATA
- * ========================================== */
+/* BLE advertising */
 
 static const struct bt_data advertising_data[] = {
     BT_DATA_BYTES(
@@ -287,10 +329,8 @@ static const struct bt_data advertising_data[] = {
 
     BT_DATA_BYTES(
         BT_DATA_UUID128_ALL,
-        0x10, 0x02, 0xC4, 0x01,
-        0xA7, 0x3C, 0x91, 0x2D,
-        0x6B, 0x4F, 0x48, 0x80,
-        0x9A, 0x21, 0x5E, 0x7D
+        0x10,0x02,0xC4,0x01,0xA7,0x3C,0x91,0x2D,
+        0x6B,0x4F,0x48,0x80,0x9A,0x21,0x5E,0x7D
     )
 };
 
@@ -302,9 +342,7 @@ static const struct bt_data scan_response[] = {
     )
 };
 
-/* ==========================================
- * MAIN APPLICATION
- * ========================================== */
+/* Main */
 
 int main(void)
 {
@@ -312,15 +350,12 @@ int main(void)
     printk("       DWM3001 TRACKER FIRMWARE\n");
     printk("====================================\n");
 
-    /* Initialize DW3110 */
-
-    printk("\n[1] Initializing DW3110...\n");
+    printk("\n[1] Initializing DW3110 hardware...\n");
 
     int ret = dw3000_hw_init();
 
     if (ret != 0) {
-        printk("ERROR: UWB initialization failed: %d\n", ret);
-
+        printk("[ERROR] UWB hardware initialization: %d\n", ret);
         while (1) {
             k_sleep(K_SECONDS(2));
         }
@@ -333,8 +368,7 @@ int main(void)
         dwt_probe((struct dwt_probe_s *)&dw3000_probe_interf);
 
     if (probe_result != DWT_SUCCESS) {
-        printk("ERROR: DW3110 identification failed.\n");
-
+        printk("[ERROR] DW3110 identification failed.\n");
         while (1) {
             k_sleep(K_SECONDS(2));
         }
@@ -342,30 +376,34 @@ int main(void)
 
     uint32_t device_id = dwt_readdevid();
 
-    printk("SUCCESS: DW3110 initialized.\n");
-    printk("Device ID: 0x%08X\n", (unsigned int)device_id);
+    printk("[SUCCESS] DW3110 detected: 0x%08X\n",
+           (unsigned int)device_id);
 
-    tracker_status = 1;
+    ret = initialize_uwb_radio();
 
-    /* Initialize Bluetooth */
+    if (ret == 0) {
+        uwb_ready = true;
+        tracker_status = 1;
+        printk("[SUCCESS] UWB radio is ready.\n");
+    } else {
+        printk("[WARNING] UWB radio unavailable: %d\n", ret);
+        tracker_status = 0;
+    }
 
     printk("\n[2] Initializing Bluetooth...\n");
 
     ret = bt_enable(NULL);
 
     if (ret != 0) {
-        printk("ERROR: Bluetooth initialization failed: %d\n", ret);
-
+        printk("[ERROR] Bluetooth initialization failed: %d\n", ret);
         while (1) {
             k_sleep(K_SECONDS(2));
         }
     }
 
-    printk("SUCCESS: Bluetooth initialized.\n");
+    printk("[SUCCESS] Bluetooth initialized.\n");
 
-    /* Start BLE advertising */
-
-    printk("\n[3] Starting tracker advertising...\n");
+    printk("\n[3] Starting BLE advertising...\n");
 
     ret = bt_le_adv_start(
         BT_LE_ADV_CONN_FAST_1,
@@ -376,20 +414,20 @@ int main(void)
     );
 
     if (ret != 0) {
-        printk("ERROR: BLE advertising failed: %d\n", ret);
-
+        printk("[ERROR] BLE advertising failed: %d\n", ret);
         while (1) {
             k_sleep(K_SECONDS(2));
         }
     }
 
-    printk("SUCCESS: Tracker is advertising!\n");
+    printk("[SUCCESS] Tracker advertising!\n");
     printk("Device name: DWM3001-TRACKER\n");
-    printk("Service UUID: 7d5e219a-8048-4f6b-2d91-3ca701c40210\n");
-    printk("Notification UUID: 7d5e219e-8048-4f6b-2d91-3ca701c40210\n");
+    printk("BLE command 0x01: PING\n");
+    printk("BLE command 0x02: STATUS\n");
+    printk("BLE command 0x03: UWB TRANSMIT\n");
 
     printk("\n====================================\n");
-    printk("       TRACKER READY\n");
+    printk("          TRACKER READY\n");
     printk("====================================\n");
 
     while (1) {
