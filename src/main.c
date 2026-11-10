@@ -1,3 +1,4 @@
+
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/sys/util.h>
@@ -50,6 +51,15 @@ static struct bt_uuid_128 tracker_command_uuid =
         0x9D, 0x21, 0x5E, 0x7D
     );
 
+/* Notifications: 7d5e219e-8048-4f6b-2d91-3ca701c40210 */
+static struct bt_uuid_128 tracker_notify_uuid =
+    BT_UUID_INIT_128(
+        0x10, 0x02, 0xC4, 0x01,
+        0xA7, 0x3C, 0x91, 0x2D,
+        0x6B, 0x4F, 0x48, 0x80,
+        0x9E, 0x21, 0x5E, 0x7D
+    );
+
 /* ==========================================
  * TRACKER DATA
  * ========================================== */
@@ -60,6 +70,17 @@ static uint8_t tracker_status = 0;
 static const uint8_t uwb_device_id_bytes[] = {
     0x02, 0x03, 0xCA, 0xDE
 };
+
+/* Notification event identifiers */
+#define TRACKER_EVENT_PING_ACK  0x81
+#define TRACKER_EVENT_STATUS    0x82
+
+/* Forward declaration */
+static void send_tracker_notification(
+    struct bt_conn *conn,
+    uint8_t event,
+    uint8_t status
+);
 
 /* ==========================================
  * GATT READ CALLBACKS
@@ -118,11 +139,23 @@ static ssize_t write_tracker_command(
     switch (command[0]) {
     case 0x01:
         printk("[BLE] PING command received.\n");
+
+        send_tracker_notification(
+            conn,
+            TRACKER_EVENT_PING_ACK,
+            tracker_status
+        );
         break;
 
     case 0x02:
         printk("[BLE] STATUS request received.\n");
         printk("[BLE] Tracker status: %u\n", tracker_status);
+
+        send_tracker_notification(
+            conn,
+            TRACKER_EVENT_STATUS,
+            tracker_status
+        );
         break;
 
     default:
@@ -140,6 +173,7 @@ static ssize_t write_tracker_command(
 BT_GATT_SERVICE_DEFINE(
     tracker_service,
 
+    /* Characteristic 1: Tracker status */
     BT_GATT_PRIMARY_SERVICE(&tracker_service_uuid),
 
     BT_GATT_CHARACTERISTIC(
@@ -151,6 +185,7 @@ BT_GATT_SERVICE_DEFINE(
         NULL
     ),
 
+    /* Characteristic 2: UWB device ID */
     BT_GATT_CHARACTERISTIC(
         &tracker_uwb_id_uuid.uuid,
         BT_GATT_CHRC_READ,
@@ -160,6 +195,7 @@ BT_GATT_SERVICE_DEFINE(
         NULL
     ),
 
+    /* Characteristic 3: Command input */
     BT_GATT_CHARACTERISTIC(
         &tracker_command_uuid.uuid,
         BT_GATT_CHRC_WRITE,
@@ -167,8 +203,77 @@ BT_GATT_SERVICE_DEFINE(
         NULL,
         write_tracker_command,
         NULL
+    ),
+
+    /* Characteristic 4: Tracker notifications */
+    BT_GATT_CHARACTERISTIC(
+        &tracker_notify_uuid.uuid,
+        BT_GATT_CHRC_NOTIFY,
+        BT_GATT_PERM_NONE,
+        NULL,
+        NULL,
+        NULL
+    ),
+
+    /* Client Characteristic Configuration Descriptor */
+    BT_GATT_CCC(
+        NULL,
+        BT_GATT_PERM_READ | BT_GATT_PERM_WRITE
     )
 );
+
+/* ==========================================
+ * BLE NOTIFICATION FUNCTION
+ * ========================================== */
+
+/*
+ * Attribute index 8 is the notification characteristic's
+ * value attribute:
+ *
+ * 0: Primary service
+ * 1-2: Status declaration/value
+ * 3-4: UWB ID declaration/value
+ * 5-6: Command declaration/value
+ * 7-8: Notification declaration/value
+ * 9: CCCD
+ */
+
+#define TRACKER_NOTIFY_ATTR_INDEX 8
+
+static void send_tracker_notification(
+    struct bt_conn *conn,
+    uint8_t event,
+    uint8_t status
+)
+{
+    uint8_t notification_data[2] = {
+        event,
+        status
+    };
+
+    int ret = bt_gatt_notify(
+        conn,
+        &tracker_service.attrs[TRACKER_NOTIFY_ATTR_INDEX],
+        notification_data,
+        sizeof(notification_data)
+    );
+
+    if (ret == 0) {
+        printk(
+            "[BLE] Notification sent: %02X %02X\n",
+            event,
+            status
+        );
+    } else {
+        printk(
+            "[BLE] Notification not sent: %d\n",
+            ret
+        );
+        printk(
+            "[BLE] Check that the iPhone subscribed to notifications.\n"
+        );
+    }
+}
 
 /* ==========================================
  * BLE ADVERTISING DATA
@@ -281,6 +386,7 @@ int main(void)
     printk("SUCCESS: Tracker is advertising!\n");
     printk("Device name: DWM3001-TRACKER\n");
     printk("Service UUID: 7d5e219a-8048-4f6b-2d91-3ca701c40210\n");
+    printk("Notification UUID: 7d5e219e-8048-4f6b-2d91-3ca701c40210\n");
 
     printk("\n====================================\n");
     printk("       TRACKER READY\n");
